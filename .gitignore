@@ -1,0 +1,15 @@
+# Build artifacts
+.build/
+dist/
+
+# macOS
+.DS_Store
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# Secrets
+.env
