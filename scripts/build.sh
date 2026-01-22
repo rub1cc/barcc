@@ -42,7 +42,7 @@ build_binary() {
     log_info "Building release binary..."
     cd "$PROJECT_DIR"
     swift build -c release
-    log_info "Build complete: $BUILD_DIR/ClaudeUsage"
+    log_info "Build complete: $BUILD_DIR/barcc"
 }
 
 create_app_bundle() {
@@ -54,11 +54,14 @@ create_app_bundle() {
     mkdir -p "$APP_BUNDLE/Contents/Resources"
 
     # Copy binary
-    cp "$BUILD_DIR/ClaudeUsage" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+    cp "$BUILD_DIR/barcc" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
     chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
     # Copy Info.plist
     cp "$PROJECT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/"
+
+    # Copy app icon
+    cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/"
 
     # Create PkgInfo
     echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"

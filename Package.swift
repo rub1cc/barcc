@@ -2,13 +2,13 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClaudeUsage",
+    name: "barcc",
     platforms: [
         .macOS(.v14)
     ],
     targets: [
         .executableTarget(
-            name: "ClaudeUsage",
+            name: "barcc",
             path: "Sources/ClaudeUsage",
             resources: [
                 .copy("../../Resources/Info.plist")

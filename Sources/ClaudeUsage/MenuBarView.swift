@@ -1,17 +1,36 @@
 import SwiftUI
 import Charts
+import UniformTypeIdentifiers
 
 enum DashboardTab: String, CaseIterable {
     case summary = "Summary"
     case daily = "Daily"
 }
 
+// MARK: - Card Section
+
+struct CardSection<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(12)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
 struct MenuBarView: View {
     @ObservedObject var stats: StatsParser
     @State private var selectedTab: DashboardTab = .summary
+    @State private var spinTrigger: Int = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 12) {
             // Tab Picker
             Picker("", selection: $selectedTab) {
                 ForEach(DashboardTab.allCases, id: \.self) { tab in
@@ -20,7 +39,6 @@ struct MenuBarView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.bottom, 16)
 
             // Content based on selected tab
             if selectedTab == .summary {
@@ -29,18 +47,33 @@ struct MenuBarView: View {
                 DailyView(stats: stats)
             }
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 8)
 
             // Footer
             HStack {
                 Button(action: {
+                    spinTrigger += 1
                     stats.loadStats()
                 }) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .font(.caption)
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12))
+                        .rotationEffect(.degrees(Double(spinTrigger) * 360))
+                        .animation(.easeInOut(duration: 0.5), value: spinTrigger)
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
+                .help("Refresh")
+                .disabled(stats.isLoading)
+
+                Button(action: {
+                    saveScreenshot(stats: stats)
+                }) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("Save Screenshot")
 
                 Spacer()
 
@@ -59,10 +92,11 @@ struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
             }
-            .padding(.top, 12)
+            .padding(.top, 4)
         }
-        .padding(16)
+        .padding(14)
         .frame(width: 350)
+        .background(VisualEffectBackground())
     }
 
     private func timeAgo(_ date: Date) -> String {
@@ -75,6 +109,49 @@ struct MenuBarView: View {
             return "\(seconds / 3600)h ago"
         }
     }
+
+    @MainActor
+    private func saveScreenshot(stats: StatsParser) {
+        let view = ShareableStatsView(stats: stats)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2.0
+
+        guard let nsImage = renderer.nsImage else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "barcc-\(dateString()).png"
+
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                guard let tiffData = nsImage.tiffRepresentation,
+                      let bitmap = NSBitmapImageRep(data: tiffData),
+                      let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
+                try? pngData.write(to: url)
+            }
+        }
+    }
+
+    private func dateString() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+}
+
+// MARK: - Visual Effect Background
+
+struct VisualEffectBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.alphaValue = 0.7
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 // MARK: - Section Header
@@ -86,27 +163,18 @@ struct SectionHeader: View {
     var body: some View {
         HStack {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.primary)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+                .textCase(.uppercase)
+                .tracking(0.5)
             Spacer()
             if let trailing = trailing {
                 Text(trailing)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.7))
             }
         }
-        .padding(.bottom, 8)
-    }
-}
-
-// MARK: - Section Divider
-
-struct SectionDivider: View {
-    var body: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.08))
-            .frame(height: 1)
-            .padding(.vertical, 14)
+        .padding(.bottom, 6)
     }
 }
 
@@ -116,60 +184,69 @@ struct SummaryView: View {
     @ObservedObject var stats: StatsParser
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Today Section
-            SectionHeader(title: "Today", trailing: timeOfDay())
+        VStack(alignment: .leading, spacing: 10) {
+            // Today + Tokens Card
+            CardSection {
+                VStack(alignment: .leading, spacing: 0) {
+                    SectionHeader(title: "Today", trailing: timeOfDay())
 
-            StatRow(label: "Cost", value: String(format: "$ %.2f", stats.todayStats.cost), detail: "\(formatTokens(stats.todayStats.inputTokens + stats.todayStats.outputTokens)) tokens")
-            StatRow(label: "Messages", value: "\(stats.todayStats.messages)", detail: "\(stats.todayStats.sessions) sessions")
+                    StatRow(label: "Cost", value: String(format: "$ %.2f", stats.todayStats.cost), detail: "\(formatTokens(stats.todayStats.inputTokens + stats.todayStats.outputTokens)) tokens")
+                    StatRow(label: "Messages", value: "\(stats.todayStats.messages)", detail: "\(stats.todayStats.sessions) sessions")
 
-            SectionDivider()
+                    Divider()
+                        .padding(.vertical, 10)
 
-            // Tokens Section
-            SectionHeader(title: "Tokens")
+                    SectionHeader(title: "Tokens")
 
-            TokenRow(label: "Input", tokens: stats.todayStats.inputTokens, color: .blue)
-            TokenRow(label: "Output", tokens: stats.todayStats.outputTokens, color: .green)
-            TokenRow(label: "Cache Read", tokens: stats.todayStats.cacheReadTokens, color: .orange)
-
-            SectionDivider()
-
-            // Monthly Section
-            SectionHeader(title: "Last 30 Days")
-
-            let monthlyTotal = stats.monthlyStats.reduce(0) { $0 + $1.cost }
-            StatRow(label: "Cost", value: String(format: "$ %.2f", monthlyTotal), detail: nil)
-
-            if !stats.monthlyStats.isEmpty && stats.monthlyStats.contains(where: { $0.cost > 0 }) {
-                MiniChart(data: stats.monthlyStats)
-                    .padding(.top, 8)
-            }
-
-            SectionDivider()
-
-            // Models Section
-            SectionHeader(title: "Models", trailing: "all time")
-
-            let usedModels = stats.modelStats.filter { $0.totalTokens > 0 || $0.cost > 0 }
-            if usedModels.isEmpty {
-                Text("No data")
-                    .font(.caption)
-                    .foregroundColor(.secondary.opacity(0.7))
-            } else {
-                ForEach(usedModels) { model in
-                    ModelRow(model: model)
+                    TokenRow(label: "Input", tokens: stats.todayStats.inputTokens, color: .blue)
+                    TokenRow(label: "Output", tokens: stats.todayStats.outputTokens, color: .green)
+                    TokenRow(label: "Cache Read", tokens: stats.todayStats.cacheReadTokens, color: .orange)
                 }
             }
 
-            SectionDivider()
+            // Monthly Section Card
+            CardSection {
+                VStack(alignment: .leading, spacing: 0) {
+                    let monthlyTotal = stats.monthlyStats.reduce(0) { $0 + $1.cost }
+                    SectionHeader(title: "Last 30 Days", trailing: String(format: "$%.2f", monthlyTotal))
 
-            // Totals
-            HStack(spacing: 0) {
-                TotalItem(value: "\(stats.totalMessages)", label: "messages")
-                Spacer()
-                TotalItem(value: "\(stats.totalSessions)", label: "sessions")
-                Spacer()
-                TotalItem(value: String(format: "$%.2f", stats.totalCost), label: "total cost")
+                    if !stats.monthlyStats.isEmpty && stats.monthlyStats.contains(where: { $0.cost > 0 }) {
+                        MiniChart(data: stats.monthlyStats)
+                    } else {
+                        Text("No data")
+                            .font(.caption)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                }
+            }
+
+            // Models Section Card
+            CardSection {
+                VStack(alignment: .leading, spacing: 0) {
+                    SectionHeader(title: "Models", trailing: "all time")
+
+                    let usedModels = stats.modelStats.filter { $0.totalTokens > 0 || $0.cost > 0 }
+                    if usedModels.isEmpty {
+                        Text("No data")
+                            .font(.caption)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    } else {
+                        ForEach(usedModels) { model in
+                            ModelRow(model: model)
+                        }
+                    }
+                }
+            }
+
+            // Totals Card
+            CardSection {
+                HStack(spacing: 0) {
+                    TotalItem(value: "\(stats.totalMessages)", label: "messages")
+                    Spacer()
+                    TotalItem(value: "\(stats.totalSessions)", label: "sessions")
+                    Spacer()
+                    TotalItem(value: String(format: "$%.2f", stats.totalCost), label: "total")
+                }
             }
         }
     }
@@ -384,54 +461,54 @@ struct DailyView: View {
     @ObservedObject var stats: StatsParser
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack(spacing: 0) {
-                Text("Date")
-                    .frame(minWidth: 80, alignment: .leading)
-                Spacer()
-                Text("Tokens")
-                    .frame(width: 60, alignment: .trailing)
-                Text("Cost")
-                    .frame(width: 55, alignment: .trailing)
-            }
-            .font(.system(size: 10, weight: .medium))
-            .foregroundColor(.secondary.opacity(0.7))
-            .padding(.bottom, 8)
-
-            Rectangle()
-                .fill(Color.primary.opacity(0.08))
-                .frame(height: 1)
-
-            // Scrollable list
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(stats.dailyBreakdown) { day in
-                        DailyRow(day: day)
+        VStack(alignment: .leading, spacing: 10) {
+            // Daily list card
+            CardSection {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Header
+                    HStack(spacing: 0) {
+                        Text("Date")
+                            .frame(minWidth: 80, alignment: .leading)
+                        Spacer()
+                        Text("Tokens")
+                            .frame(width: 60, alignment: .trailing)
+                        Text("Cost")
+                            .frame(width: 55, alignment: .trailing)
                     }
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.bottom, 8)
+
+                    Divider()
+
+                    // Scrollable list
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(stats.dailyBreakdown) { day in
+                                DailyRow(day: day)
+                            }
+                        }
+                    }
+                    .frame(height: 300)
                 }
             }
-            .frame(height: 320)
 
-            Rectangle()
-                .fill(Color.primary.opacity(0.08))
-                .frame(height: 1)
-
-            // Total row
-            HStack(spacing: 0) {
-                Text("Total")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(minWidth: 80, alignment: .leading)
-                Spacer()
-                Text(formatTokens(stats.dailyBreakdown.reduce(0) { $0 + $1.inputTokens + $1.outputTokens }))
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .frame(width: 60, alignment: .trailing)
-                Text(String(format: "$%.2f", stats.totalCost))
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .frame(width: 55, alignment: .trailing)
+            // Total card
+            CardSection {
+                HStack(spacing: 0) {
+                    Text("Total")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(minWidth: 80, alignment: .leading)
+                    Spacer()
+                    Text(formatTokens(stats.dailyBreakdown.reduce(0) { $0 + $1.inputTokens + $1.outputTokens }))
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .frame(width: 60, alignment: .trailing)
+                    Text(String(format: "$%.2f", stats.totalCost))
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .frame(width: 55, alignment: .trailing)
+                }
             }
-            .padding(.top, 10)
         }
     }
 
@@ -477,7 +554,11 @@ struct DailyRow: View {
                 .frame(width: 55, alignment: .trailing)
         }
         .padding(.vertical, 8)
-        .background(isHovered ? Color.primary.opacity(0.04) : Color.clear)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
+        )
         .onHover { hovering in
             isHovered = hovering
         }
@@ -504,6 +585,140 @@ struct DailyRow: View {
         } else {
             return "\(tokens)"
         }
+    }
+}
+
+// MARK: - Shareable Stats View (for screenshot)
+
+struct ShareableStatsView: View {
+    @ObservedObject var stats: StatsParser
+
+    private let cardBackground = Color.primary.opacity(0.06)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            HStack {
+                Text("barcc")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                Spacer()
+                Text(formattedDate())
+                    .font(.system(size: 14))
+                    .foregroundColor(.secondary)
+            }
+
+            // Today stats - full width
+            VStack(alignment: .leading, spacing: 12) {
+                Text("TODAY")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .tracking(1)
+
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(String(format: "$%.2f", stats.todayStats.cost))
+                        .font(.system(size: 42, weight: .bold, design: .rounded))
+                    Text("spent")
+                        .font(.system(size: 16))
+                        .foregroundColor(.secondary)
+                }
+
+                HStack(spacing: 0) {
+                    StatBubble(value: "\(stats.todayStats.messages)", label: "messages")
+                    Spacer()
+                    StatBubble(value: "\(stats.todayStats.sessions)", label: "sessions")
+                    Spacer()
+                    StatBubble(value: formatTokens(stats.todayStats.inputTokens + stats.todayStats.outputTokens), label: "tokens")
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            // Tokens breakdown - equal width cards
+            HStack(spacing: 12) {
+                TokenBubble(label: "Input", tokens: stats.todayStats.inputTokens, color: .blue, background: cardBackground)
+                TokenBubble(label: "Output", tokens: stats.todayStats.outputTokens, color: .green, background: cardBackground)
+                TokenBubble(label: "Cache", tokens: stats.todayStats.cacheReadTokens, color: .orange, background: cardBackground)
+            }
+
+            // Footer
+            HStack {
+                Spacer()
+                Text("generated with barcc")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.5))
+            }
+        }
+        .padding(28)
+        .frame(width: 520)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func formattedDate() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy"
+        return formatter.string(from: Date())
+    }
+
+    private func formatTokens(_ tokens: Int) -> String {
+        if tokens >= 1_000_000 {
+            return String(format: "%.1fM", Double(tokens) / 1_000_000)
+        } else if tokens >= 1_000 {
+            return String(format: "%.1fK", Double(tokens) / 1_000)
+        } else {
+            return "\(tokens)"
+        }
+    }
+}
+
+struct StatBubble: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+struct TokenBubble: View {
+    let label: String
+    let tokens: Int
+    let color: Color
+    let background: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            Text(formatTokens(tokens))
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(background)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func formatTokens(_ tokens: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: tokens)) ?? "\(tokens)"
     }
 }
 

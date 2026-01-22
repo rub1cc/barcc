@@ -7,12 +7,14 @@ struct StatusBarIcon {
 
         // Color based on daily spend
         let color: NSColor
-        if cost < 1.0 {
+        if cost < 10.0 {
             color = .systemGreen
-        } else if cost < 5.0 {
+        } else if cost < 20.0 {
             color = .systemYellow
-        } else {
+        } else if cost < 50.0 {
             color = .systemOrange
+        } else {
+            color = .systemRed
         }
 
         let colorConfig = NSImage.SymbolConfiguration(paletteColors: [color])
@@ -26,12 +28,14 @@ struct StatusBarIcon {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
 
         let color: NSColor
-        if cost < 1.0 {
+        if cost < 10.0 {
             color = .systemGreen
-        } else if cost < 5.0 {
+        } else if cost < 20.0 {
             color = .systemYellow
-        } else {
+        } else if cost < 50.0 {
             color = .systemOrange
+        } else {
+            color = .systemRed
         }
 
         let colorConfig = NSImage.SymbolConfiguration(paletteColors: [color])

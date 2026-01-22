@@ -129,6 +129,7 @@ class StatsParser: ObservableObject {
     @Published var totalSessions: Int = 0
     @Published var totalCost: Double = 0
     @Published var lastUpdated: Date = Date()
+    @Published var isLoading: Bool = false
 
     private let projectsPath: String
     private var pollingTimer: Timer?
@@ -207,10 +208,24 @@ class StatsParser: ObservableObject {
     }
 
     func loadStats() {
+        guard !isLoading else { return }
+        isLoading = true
+
+        // Dispatch to allow UI to update first
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.performLoadStats()
+        }
+    }
+
+    private func performLoadStats() {
+        let startTime = Date()
         seenRequests.removeAll()
 
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: projectsPath) else { return }
+        guard fileManager.fileExists(atPath: projectsPath) else {
+            finishLoading(startTime: startTime)
+            return
+        }
 
         // Find all JSONL files
         let enumerator = fileManager.enumerator(atPath: projectsPath)
@@ -443,6 +458,20 @@ class StatsParser: ObservableObject {
         dailyBreakdown = breakdowns.sorted { $0.date > $1.date }
 
         lastUpdated = Date()
+        finishLoading(startTime: startTime)
+    }
+
+    private func finishLoading(startTime: Date) {
+        // Minimum loading time for visual feedback
+        let elapsed = Date().timeIntervalSince(startTime)
+        let minDuration = 0.6
+        if elapsed < minDuration {
+            DispatchQueue.main.asyncAfter(deadline: .now() + (minDuration - elapsed)) {
+                self.isLoading = false
+            }
+        } else {
+            isLoading = false
+        }
     }
 
     private func setupPolling() {
