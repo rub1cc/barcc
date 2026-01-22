@@ -125,6 +125,9 @@ create_dmg() {
     cp -R "$APP_BUNDLE" "$DMG_TEMP/"
     ln -s /Applications "$DMG_TEMP/Applications"
 
+    # Remove quarantine attribute to prevent "damaged" error on other Macs
+    xattr -cr "$DMG_TEMP/$APP_NAME.app"
+
     # Create DMG
     hdiutil create -volname "$APP_NAME" \
         -srcfolder "$DMG_TEMP" \
