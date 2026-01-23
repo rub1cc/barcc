@@ -9,7 +9,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "barcc",
-            path: "Sources/ClaudeUsage",
+            path: "Sources/barcc",
             resources: [
                 .copy("../../Resources/Info.plist")
             ]
