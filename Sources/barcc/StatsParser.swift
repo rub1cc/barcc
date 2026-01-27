@@ -130,10 +130,16 @@ class StatsParser: ObservableObject {
     @Published var totalCost: Double = 0
     @Published var lastUpdated: Date = Date()
     @Published var isLoading: Bool = false
+    @Published var statusBarMode: StatusBarDisplayMode = .iconAndCost {
+        didSet {
+            UserDefaults.standard.set(statusBarMode.rawValue, forKey: statusBarModeKey)
+        }
+    }
 
     private let projectsPath: String
     private var pollingTimer: Timer?
     private var seenRequests = Set<String>()
+    private let statusBarModeKey = "statusBarMode"
 
     // Pricing per million tokens (calibrated to match Claude Code /cost)
     // Note: Max plan pricing differs from published API rates
@@ -199,12 +205,31 @@ class StatsParser: ObservableObject {
     init() {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         self.projectsPath = "\(homeDir)/.claude/projects"
+        if let rawValue = UserDefaults.standard.string(forKey: statusBarModeKey),
+           let savedMode = StatusBarDisplayMode(rawValue: rawValue) {
+            statusBarMode = savedMode
+        }
         loadStats()
         setupPolling()
     }
 
     deinit {
         pollingTimer?.invalidate()
+    }
+
+    var todayTotalTokens: Int { todayStats.totalTokens }
+    var yesterdayCost: Double { weeklyStats.dropLast().last?.cost ?? 0 }
+    var yesterdayTokens: Int { weeklyStats.dropLast().last?.tokens ?? 0 }
+    var weekTotalCost: Double { weeklyStats.reduce(0) { $0 + $1.cost } }
+    var weekTotalTokens: Int { weeklyStats.reduce(0) { $0 + $1.tokens } }
+    var weekAvgCost: Double {
+        guard !weeklyStats.isEmpty else { return 0 }
+        return weekTotalCost / Double(weeklyStats.count)
+    }
+    var todayCostDelta: Double { todayStats.cost - yesterdayCost }
+    var todayCostDeltaPercent: Double? {
+        guard yesterdayCost > 0 else { return nil }
+        return todayCostDelta / yesterdayCost
     }
 
     func loadStats() {

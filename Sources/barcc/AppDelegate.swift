@@ -42,13 +42,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateStatusButton()
             }
             .store(in: &cancellables)
+
+        statsParser?.$statusBarMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateStatusButton()
+            }
+            .store(in: &cancellables)
     }
 
     private func updateStatusButton() {
         guard let button = statusItem?.button, let stats = statsParser else { return }
 
         let cost = stats.todayStats.cost
-        let costText = cost > 0 ? String(format: "$%.2f", cost) : "$0"
+        let costText = cost > 0 ? StatsFormatting.formatCost(cost) : "$0"
+        let tokensText = "\(StatsFormatting.formatTokensCompact(stats.todayTotalTokens)) tok"
 
         // Create attributed string with icon and cost
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
@@ -59,26 +67,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             color = .systemGreen
         } else if cost < 5.0 {
             color = .systemYellow
-        } else {
+        } else if cost < 10.0 {
             color = .systemOrange
+        } else {
+            color = .systemRed
         }
 
         let colorConfig = NSImage.SymbolConfiguration(paletteColors: [color])
         let combinedConfig = config.applying(colorConfig)
+
+        let titleText: String
+        switch stats.statusBarMode {
+        case .iconOnly:
+            titleText = ""
+        case .iconAndCost:
+            titleText = costText
+        case .iconAndTokens:
+            titleText = tokensText
+        case .compact:
+            titleText = "\(costText) \(tokensText)"
+        }
 
         if let icon = NSImage(systemSymbolName: "dollarsign.circle.fill", accessibilityDescription: "Usage")?.withSymbolConfiguration(combinedConfig) {
             let attachment = NSTextAttachment()
             attachment.image = icon
 
             let attrString = NSMutableAttributedString(attachment: attachment)
-            attrString.append(NSAttributedString(string: " \(costText)", attributes: [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: NSColor.labelColor
-            ]))
+            if !titleText.isEmpty {
+                attrString.append(NSAttributedString(string: " \(titleText)", attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
+                    .foregroundColor: NSColor.labelColor
+                ]))
+            }
 
             button.attributedTitle = attrString
+            button.image = nil
         } else {
-            button.title = costText
+            button.title = titleText.isEmpty ? costText : titleText
         }
     }
 

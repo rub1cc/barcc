@@ -43,11 +43,11 @@ struct MenuBarView: View {
             // Content based on selected tab
             if selectedTab == .summary {
                 SummaryView(stats: stats)
+                Spacer(minLength: 8)
             } else {
                 DailyView(stats: stats)
+                    .frame(maxHeight: .infinity)
             }
-
-            Spacer(minLength: 8)
 
             // Footer
             HStack {
@@ -74,6 +74,8 @@ struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
                 .help("Save Screenshot")
+
+                StatusModeMenu(mode: $stats.statusBarMode)
 
                 Spacer()
 
@@ -139,6 +141,38 @@ struct MenuBarView: View {
     }
 }
 
+// MARK: - Status Mode Menu
+
+struct StatusModeMenu: View {
+    @Binding var mode: StatusBarDisplayMode
+
+    var body: some View {
+        Menu {
+            ForEach(StatusBarDisplayMode.allCases) { option in
+                Button {
+                    mode = option
+                } label: {
+                    if option == mode {
+                        Label(option.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(option.rawValue)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 12))
+                Text(mode.shortLabel)
+                    .font(.caption)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundColor(.secondary)
+        .help("Status bar display")
+    }
+}
+
 // MARK: - Visual Effect Background
 
 struct VisualEffectBackground: NSViewRepresentable {
@@ -185,68 +219,54 @@ struct SummaryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Today + Tokens Card
             CardSection {
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: "Today", trailing: timeOfDay())
-
-                    StatRow(label: "Cost", value: String(format: "$ %.2f", stats.todayStats.cost), detail: "\(formatTokens(stats.todayStats.inputTokens + stats.todayStats.outputTokens)) tokens")
-                    StatRow(label: "Messages", value: "\(stats.todayStats.messages)", detail: "\(stats.todayStats.sessions) sessions")
-
-                    Divider()
-                        .padding(.vertical, 10)
-
-                    SectionHeader(title: "Tokens")
-
-                    TokenRow(label: "Input", tokens: stats.todayStats.inputTokens, color: .blue)
-                    TokenRow(label: "Output", tokens: stats.todayStats.outputTokens, color: .green)
-                    TokenRow(label: "Cache Read", tokens: stats.todayStats.cacheReadTokens, color: .orange)
-                }
+                TodayOverviewCard(stats: stats)
             }
 
-            // Monthly Section Card
             CardSection {
-                VStack(alignment: .leading, spacing: 0) {
-                    let monthlyTotal = stats.monthlyStats.reduce(0) { $0 + $1.cost }
-                    SectionHeader(title: "Last 30 Days", trailing: String(format: "$%.2f", monthlyTotal))
-
-                    if !stats.monthlyStats.isEmpty && stats.monthlyStats.contains(where: { $0.cost > 0 }) {
-                        MiniChart(data: stats.monthlyStats)
-                    } else {
-                        Text("No data")
-                            .font(.caption)
-                            .foregroundColor(.secondary.opacity(0.7))
-                    }
-                }
+                TrendOverviewCard(stats: stats)
             }
 
-            // Models Section Card
             CardSection {
-                VStack(alignment: .leading, spacing: 0) {
-                    SectionHeader(title: "Models", trailing: "all time")
-
-                    let usedModels = stats.modelStats.filter { $0.totalTokens > 0 || $0.cost > 0 }
-                    if usedModels.isEmpty {
-                        Text("No data")
-                            .font(.caption)
-                            .foregroundColor(.secondary.opacity(0.7))
-                    } else {
-                        ForEach(usedModels) { model in
-                            ModelRow(model: model)
-                        }
-                    }
-                }
+                ModelSummaryCard(stats: stats)
             }
 
-            // Totals Card
             CardSection {
-                HStack(spacing: 0) {
-                    TotalItem(value: "\(stats.totalMessages)", label: "messages")
-                    Spacer()
-                    TotalItem(value: "\(stats.totalSessions)", label: "sessions")
-                    Spacer()
-                    TotalItem(value: String(format: "$%.2f", stats.totalCost), label: "total")
-                }
+                TotalsSummaryCard(stats: stats)
+            }
+        }
+    }
+}
+
+// MARK: - Today Overview
+
+struct TodayOverviewCard: View {
+    @ObservedObject var stats: StatsParser
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: "Today", trailing: timeOfDay())
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(StatsFormatting.formatCost(stats.todayStats.cost))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                TrendBadge(deltaPercent: stats.todayCostDeltaPercent)
+            }
+
+            HStack(spacing: 8) {
+                StatTile(title: "Tokens", value: StatsFormatting.formatTokensCompact(stats.todayTotalTokens))
+                StatTile(title: "Messages", value: StatsFormatting.formatCount(stats.todayStats.messages))
+                StatTile(title: "Sessions", value: StatsFormatting.formatCount(stats.todayStats.sessions))
+            }
+
+            Divider()
+                .padding(.vertical, 6)
+
+            TokenRow(label: "Input", tokens: stats.todayStats.inputTokens, color: .blue)
+            TokenRow(label: "Output", tokens: stats.todayStats.outputTokens, color: .green)
+            TokenRow(label: "Cache Read", tokens: stats.todayStats.cacheReadTokens, color: .orange)
+            if stats.todayStats.cacheCreationTokens > 0 {
+                TokenRow(label: "Cache Write", tokens: stats.todayStats.cacheCreationTokens, color: .mint)
             }
         }
     }
@@ -256,24 +276,135 @@ struct SummaryView: View {
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: Date())
     }
+}
 
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.1fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
+// MARK: - Trend Overview
+
+struct TrendOverviewCard: View {
+    @ObservedObject var stats: StatsParser
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(title: "Last 7 Days", trailing: StatsFormatting.formatCost(stats.weekTotalCost))
+
+            let hasData = stats.weeklyStats.contains { $0.cost > 0 || $0.tokens > 0 }
+            if hasData {
+                MiniChart(data: stats.weeklyStats, labelStrideDays: 2)
+
+                SummaryRow(label: "Avg/day", value: StatsFormatting.formatCost(stats.weekAvgCost))
+                SummaryRow(label: "30d total", value: StatsFormatting.formatCost(monthlyTotal))
+            } else {
+                Text("No data")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+            }
+        }
+    }
+
+    private var monthlyTotal: Double {
+        stats.monthlyStats.reduce(0) { $0 + $1.cost }
+    }
+}
+
+// MARK: - Model Overview
+
+struct ModelSummaryCard: View {
+    @ObservedObject var stats: StatsParser
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SectionHeader(title: "Top Models", trailing: "all time")
+
+            let totalCost = stats.totalCost
+            let topModels = stats.modelStats.filter { $0.cost > 0 }.prefix(3)
+
+            if topModels.isEmpty {
+                Text("No data")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+            } else {
+                ForEach(Array(topModels)) { model in
+                    let share = totalCost > 0 ? model.cost / totalCost : 0
+                    ModelShareRow(model: model, share: share)
+                }
+            }
         }
     }
 }
 
-// MARK: - Stat Row
+// MARK: - Totals Overview
 
-struct StatRow: View {
+struct TotalsSummaryCard: View {
+    @ObservedObject var stats: StatsParser
+
+    var body: some View {
+        HStack(spacing: 0) {
+            TotalItem(value: StatsFormatting.formatCount(stats.totalMessages), label: "messages")
+            Spacer()
+            TotalItem(value: StatsFormatting.formatCount(stats.totalSessions), label: "sessions")
+            Spacer()
+            TotalItem(value: StatsFormatting.formatCost(stats.totalCost), label: "total")
+        }
+    }
+}
+
+// MARK: - Summary Helpers
+
+struct TrendBadge: View {
+    let deltaPercent: Double?
+
+    var body: some View {
+        Text(badgeText)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundColor(badgeColor)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(badgeColor.opacity(0.12))
+            .clipShape(Capsule())
+    }
+
+    private var badgeText: String {
+        if let percent = deltaPercent {
+            return "\(StatsFormatting.formatPercent(percent, includeSign: true)) vs yesterday"
+        }
+        return "No prior day"
+    }
+
+    private var badgeColor: Color {
+        guard let percent = deltaPercent else { return .secondary }
+        if percent > 0 {
+            return .green
+        }
+        if percent < 0 {
+            return .red
+        }
+        return .secondary
+    }
+}
+
+struct StatTile: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(Color.primary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct SummaryRow: View {
     let label: String
     let value: String
-    let detail: String?
 
     var body: some View {
         HStack {
@@ -282,16 +413,38 @@ struct StatRow: View {
                 .foregroundColor(.secondary)
             Spacer()
             Text(value)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-            if let detail = detail {
-                Text("·")
-                    .foregroundColor(.secondary.opacity(0.7))
-                Text(detail)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
+    }
+}
+
+struct ModelShareRow: View {
+    let model: ModelStats
+    let share: Double
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(modelColor)
+                .frame(width: 6, height: 6)
+            Text(model.displayName)
+                .font(.caption)
+                .foregroundColor(.primary)
+            Spacer()
+            Text(StatsFormatting.formatPercent(share, maximumFractionDigits: 0))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.secondary)
+            Text(StatsFormatting.formatCost(model.cost))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var modelColor: Color {
+        if model.displayName.contains("Opus") { return .orange }
+        if model.displayName.contains("Haiku") { return .teal }
+        return .blue
     }
 }
 
@@ -311,16 +464,10 @@ struct TokenRow: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
             Spacer()
-            Text(formatTokens(tokens))
+            Text(StatsFormatting.formatTokensFull(tokens))
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
         }
         .padding(.vertical, 2)
-    }
-
-    private func formatTokens(_ tokens: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: tokens)) ?? "\(tokens)"
     }
 }
 
@@ -338,10 +485,10 @@ struct ModelRow: View {
                 .font(.caption)
                 .foregroundColor(.primary)
             Spacer()
-            Text(formatTokens(model.totalTokens))
+            Text(StatsFormatting.formatTokensCompact(model.totalTokens))
                 .font(.caption)
                 .foregroundColor(.secondary.opacity(0.7))
-            Text(String(format: "$%.2f", model.cost))
+            Text(StatsFormatting.formatCost(model.cost))
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
         }
         .padding(.vertical, 2)
@@ -352,24 +499,13 @@ struct ModelRow: View {
         else if model.displayName.contains("Haiku") { return .cyan }
         else { return .blue }
     }
-
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000_000 {
-            return String(format: "%.1fB", Double(tokens) / 1_000_000_000)
-        } else if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.0fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
-    }
 }
 
 // MARK: - Mini Chart
 
 struct MiniChart: View {
     let data: [DailyCost]
+    var labelStrideDays: Int = 7
     @State private var hoveredDay: DailyCost?
 
     var body: some View {
@@ -387,7 +523,7 @@ struct MiniChart: View {
                 .cornerRadius(1)
             }
             .chartXAxis {
-                AxisMarks(values: .stride(by: .day, count: 7)) { value in
+                AxisMarks(values: .stride(by: .day, count: labelStrideDays)) { value in
                     AxisValueLabel(format: .dateTime.day().month(.abbreviated))
                         .font(.system(size: 8))
                 }
@@ -420,7 +556,7 @@ struct MiniChart: View {
                 HStack(spacing: 4) {
                     Text(dayString(day.date))
                         .foregroundColor(.secondary)
-                    Text(String(format: "$%.2f", day.cost))
+                    Text(StatsFormatting.formatCost(day.cost))
                         .fontWeight(.medium)
                 }
                 .font(.system(size: 11))
@@ -489,9 +625,11 @@ struct DailyView: View {
                             }
                         }
                     }
-                    .frame(height: 300)
+                    .frame(maxHeight: .infinity)
                 }
+                .frame(maxHeight: .infinity, alignment: .top)
             }
+            .frame(maxHeight: .infinity)
 
             // Total card
             CardSection {
@@ -500,25 +638,15 @@ struct DailyView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .frame(minWidth: 80, alignment: .leading)
                     Spacer()
-                    Text(formatTokens(stats.dailyBreakdown.reduce(0) { $0 + $1.inputTokens + $1.outputTokens }))
+                    Text(StatsFormatting.formatTokensCompact(stats.dailyBreakdown.reduce(0) { $0 + $1.totalTokens }))
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .frame(width: 60, alignment: .trailing)
-                    Text(String(format: "$%.2f", stats.totalCost))
+                    Text(StatsFormatting.formatCost(stats.totalCost))
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundColor(.primary)
                         .frame(width: 55, alignment: .trailing)
                 }
             }
-        }
-    }
-
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.0fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
         }
     }
 }
@@ -544,12 +672,12 @@ struct DailyRow: View {
 
             Spacer()
 
-            Text(formatTokens(day.inputTokens + day.outputTokens))
+            Text(formatTokens(day.totalTokens))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
                 .frame(width: 60, alignment: .trailing)
 
-            Text(String(format: "$%.2f", day.cost))
+            Text(StatsFormatting.formatCost(day.cost))
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .frame(width: 55, alignment: .trailing)
         }
@@ -578,13 +706,7 @@ struct DailyRow: View {
     }
 
     private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.0fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
+        StatsFormatting.formatTokensCompact(tokens)
     }
 }
 
@@ -615,7 +737,7 @@ struct ShareableStatsView: View {
                     .tracking(1)
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(String(format: "$%.2f", stats.todayStats.cost))
+                    Text(StatsFormatting.formatCost(stats.todayStats.cost))
                         .font(.system(size: 42, weight: .bold, design: .rounded))
                     Text("spent")
                         .font(.system(size: 16))
@@ -623,11 +745,11 @@ struct ShareableStatsView: View {
                 }
 
                 HStack(spacing: 0) {
-                    StatBubble(value: "\(stats.todayStats.messages)", label: "messages")
+                    StatBubble(value: StatsFormatting.formatCount(stats.todayStats.messages), label: "messages")
                     Spacer()
-                    StatBubble(value: "\(stats.todayStats.sessions)", label: "sessions")
+                    StatBubble(value: StatsFormatting.formatCount(stats.todayStats.sessions), label: "sessions")
                     Spacer()
-                    StatBubble(value: formatTokens(stats.todayStats.inputTokens + stats.todayStats.outputTokens), label: "tokens")
+                    StatBubble(value: StatsFormatting.formatTokensCompact(stats.todayStats.inputTokens + stats.todayStats.outputTokens), label: "tokens")
                 }
             }
             .padding(20)
@@ -662,15 +784,6 @@ struct ShareableStatsView: View {
         return formatter.string(from: Date())
     }
 
-    private func formatTokens(_ tokens: Int) -> String {
-        if tokens >= 1_000_000 {
-            return String(format: "%.1fM", Double(tokens) / 1_000_000)
-        } else if tokens >= 1_000 {
-            return String(format: "%.1fK", Double(tokens) / 1_000)
-        } else {
-            return "\(tokens)"
-        }
-    }
 }
 
 struct StatBubble: View {
@@ -716,9 +829,7 @@ struct TokenBubble: View {
     }
 
     private func formatTokens(_ tokens: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: tokens)) ?? "\(tokens)"
+        StatsFormatting.formatTokensFull(tokens)
     }
 }
 
