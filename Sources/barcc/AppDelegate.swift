@@ -49,6 +49,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateStatusButton()
             }
             .store(in: &cancellables)
+
+        statsParser?.$dailySpendLimit
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateStatusButton()
+            }
+            .store(in: &cancellables)
+
+        statsParser?.$includeCacheTokens
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateStatusButton()
+            }
+            .store(in: &cancellables)
     }
 
     private func updateStatusButton() {
@@ -56,22 +70,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let cost = stats.todayStats.cost
         let costText = cost > 0 ? StatsFormatting.formatCost(cost) : "$0"
-        let tokensText = "\(StatsFormatting.formatTokensCompact(stats.todayTotalTokens)) tok"
+        let tokensText = "\(StatsFormatting.formatTokensCompact(stats.todayDisplayTokens)) tok"
 
         // Create attributed string with icon and cost
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
 
         // Color based on daily spend
-        let color: NSColor
-        if cost < 1.0 {
-            color = .systemGreen
-        } else if cost < 5.0 {
-            color = .systemYellow
-        } else if cost < 10.0 {
-            color = .systemOrange
-        } else {
-            color = .systemRed
-        }
+        let color = statusColor(for: cost, limit: stats.dailySpendLimit)
 
         let colorConfig = NSImage.SymbolConfiguration(paletteColors: [color])
         let combinedConfig = config.applying(colorConfig)
@@ -105,6 +110,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             button.title = titleText.isEmpty ? costText : titleText
         }
+    }
+
+    private func statusColor(for cost: Double, limit: Double) -> NSColor {
+        let safeLimit = max(limit, 1)
+        let percent = cost / safeLimit
+
+        if percent < 0.25 {
+            return .systemGreen
+        } else if percent < 0.5 {
+            return .systemYellow
+        } else if percent < 0.75 {
+            return .systemOrange
+        }
+        return .systemRed
     }
 
     @objc private func togglePopover() {

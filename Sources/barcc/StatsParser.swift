@@ -135,11 +135,30 @@ class StatsParser: ObservableObject {
             UserDefaults.standard.set(statusBarMode.rawValue, forKey: statusBarModeKey)
         }
     }
+    @Published var includeCacheTokens: Bool = true {
+        didSet {
+            UserDefaults.standard.set(includeCacheTokens, forKey: includeCacheTokensKey)
+        }
+    }
+    @Published var refreshInterval: TimeInterval = 30 {
+        didSet {
+            UserDefaults.standard.set(refreshInterval, forKey: refreshIntervalKey)
+            updatePollingTimer()
+        }
+    }
+    @Published var dailySpendLimit: Double = 100 {
+        didSet {
+            UserDefaults.standard.set(dailySpendLimit, forKey: dailySpendLimitKey)
+        }
+    }
 
     private let projectsPath: String
     private var pollingTimer: Timer?
     private var seenRequests = Set<String>()
     private let statusBarModeKey = "statusBarMode"
+    private let includeCacheTokensKey = "includeCacheTokens"
+    private let refreshIntervalKey = "refreshInterval"
+    private let dailySpendLimitKey = "dailySpendLimit"
 
     // Pricing per million tokens (calibrated to match Claude Code /cost)
     // Note: Max plan pricing differs from published API rates
@@ -209,6 +228,17 @@ class StatsParser: ObservableObject {
            let savedMode = StatusBarDisplayMode(rawValue: rawValue) {
             statusBarMode = savedMode
         }
+        if UserDefaults.standard.object(forKey: includeCacheTokensKey) != nil {
+            includeCacheTokens = UserDefaults.standard.bool(forKey: includeCacheTokensKey)
+        }
+        let savedInterval = UserDefaults.standard.double(forKey: refreshIntervalKey)
+        if savedInterval > 0 {
+            refreshInterval = savedInterval
+        }
+        let savedLimit = UserDefaults.standard.double(forKey: dailySpendLimitKey)
+        if savedLimit > 0 {
+            dailySpendLimit = savedLimit
+        }
         loadStats()
         setupPolling()
     }
@@ -218,6 +248,14 @@ class StatsParser: ObservableObject {
     }
 
     var todayTotalTokens: Int { todayStats.totalTokens }
+    var todayDisplayTokens: Int {
+        displayTokens(
+            input: todayStats.inputTokens,
+            output: todayStats.outputTokens,
+            cacheRead: todayStats.cacheReadTokens,
+            cacheCreation: todayStats.cacheCreationTokens
+        )
+    }
     var yesterdayCost: Double { weeklyStats.dropLast().last?.cost ?? 0 }
     var yesterdayTokens: Int { weeklyStats.dropLast().last?.tokens ?? 0 }
     var weekTotalCost: Double { weeklyStats.reduce(0) { $0 + $1.cost } }
@@ -230,6 +268,22 @@ class StatsParser: ObservableObject {
     var todayCostDeltaPercent: Double? {
         guard yesterdayCost > 0 else { return nil }
         return todayCostDelta / yesterdayCost
+    }
+
+    func displayTokens(input: Int, output: Int, cacheRead: Int, cacheCreation: Int) -> Int {
+        if includeCacheTokens {
+            return input + output + cacheRead + cacheCreation
+        }
+        return input + output
+    }
+
+    func displayTokens(for day: DailyBreakdown) -> Int {
+        displayTokens(
+            input: day.inputTokens,
+            output: day.outputTokens,
+            cacheRead: day.cacheReadTokens,
+            cacheCreation: day.cacheCreationTokens
+        )
     }
 
     func loadStats() {
@@ -500,7 +554,13 @@ class StatsParser: ObservableObject {
     }
 
     private func setupPolling() {
-        pollingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        updatePollingTimer()
+    }
+
+    private func updatePollingTimer() {
+        pollingTimer?.invalidate()
+        let interval = max(refreshInterval, 10)
+        pollingTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.loadStats()
         }
     }

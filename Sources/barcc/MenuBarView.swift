@@ -28,6 +28,7 @@ struct MenuBarView: View {
     @ObservedObject var stats: StatsParser
     @State private var selectedTab: DashboardTab = .summary
     @State private var spinTrigger: Int = 0
+    @State private var showSettings: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -75,7 +76,18 @@ struct MenuBarView: View {
                 .foregroundColor(.secondary)
                 .help("Save Screenshot")
 
-                StatusModeMenu(mode: $stats.statusBarMode)
+                Button(action: {
+                    showSettings.toggle()
+                }) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .help("Settings")
+                .popover(isPresented: $showSettings, arrowEdge: .bottom) {
+                    SettingsPanel(stats: stats)
+                }
 
                 Spacer()
 
@@ -141,35 +153,87 @@ struct MenuBarView: View {
     }
 }
 
-// MARK: - Status Mode Menu
+// MARK: - Settings Panel
 
-struct StatusModeMenu: View {
-    @Binding var mode: StatusBarDisplayMode
+struct SettingsPanel: View {
+    @ObservedObject var stats: StatsParser
+
+    private let intervalOptions: [(label: String, value: TimeInterval)] = [
+        ("15s", 15),
+        ("30s", 30),
+        ("1m", 60),
+        ("2m", 120),
+        ("5m", 300),
+    ]
 
     var body: some View {
-        Menu {
-            ForEach(StatusBarDisplayMode.allCases) { option in
-                Button {
-                    mode = option
-                } label: {
-                    if option == mode {
-                        Label(option.rawValue, systemImage: "checkmark")
-                    } else {
-                        Text(option.rawValue)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Settings")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+
+            HStack {
+                Text("Status bar")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Picker("", selection: $stats.statusBarMode) {
+                    ForEach(StatusBarDisplayMode.allCases) { option in
+                        Text(option.rawValue).tag(option)
                     }
                 }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 160, alignment: .trailing)
             }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 12))
-                Text(mode.shortLabel)
-                    .font(.caption)
+
+            HStack {
+                Text("Refresh")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                Picker("", selection: $stats.refreshInterval) {
+                    ForEach(intervalOptions, id: \.value) { option in
+                        Text(option.label).tag(option.value)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 120, alignment: .trailing)
             }
+
+            Toggle("Include cache tokens", isOn: $stats.includeCacheTokens)
+                .font(.system(size: 11, weight: .medium))
+                .toggleStyle(.switch)
+
+            Divider()
+
+            HStack {
+                Text("Daily limit")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                HStack(spacing: 6) {
+                    Text("$")
+                        .foregroundColor(.secondary)
+                    TextField("", value: limitBinding, format: .number)
+                        .frame(width: 70)
+                        .multilineTextAlignment(.trailing)
+                    Stepper("", value: limitBinding, in: 1...1000, step: 5)
+                        .labelsHidden()
+                }
+            }
+
+            Text("Colors: <25% green, <50% yellow, <75% orange, ≥75% red")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
         }
-        .buttonStyle(.plain)
-        .foregroundColor(.secondary)
-        .help("Status bar display")
+        .padding(12)
+        .frame(width: 280)
+    }
+
+    private var limitBinding: Binding<Double> {
+        Binding(
+            get: { stats.dailySpendLimit },
+            set: { stats.dailySpendLimit = max(1, $0) }
+        )
     }
 }
 
@@ -254,7 +318,7 @@ struct TodayOverviewCard: View {
             }
 
             HStack(spacing: 8) {
-                StatTile(title: "Tokens", value: StatsFormatting.formatTokensCompact(stats.todayTotalTokens))
+                StatTile(title: "Tokens", value: StatsFormatting.formatTokensCompact(stats.todayDisplayTokens))
                 StatTile(title: "Messages", value: StatsFormatting.formatCount(stats.todayStats.messages))
                 StatTile(title: "Sessions", value: StatsFormatting.formatCount(stats.todayStats.sessions))
             }
@@ -264,9 +328,11 @@ struct TodayOverviewCard: View {
 
             TokenRow(label: "Input", tokens: stats.todayStats.inputTokens, color: .blue)
             TokenRow(label: "Output", tokens: stats.todayStats.outputTokens, color: .green)
-            TokenRow(label: "Cache Read", tokens: stats.todayStats.cacheReadTokens, color: .orange)
-            if stats.todayStats.cacheCreationTokens > 0 {
-                TokenRow(label: "Cache Write", tokens: stats.todayStats.cacheCreationTokens, color: .mint)
+            if stats.includeCacheTokens {
+                TokenRow(label: "Cache Read", tokens: stats.todayStats.cacheReadTokens, color: .orange)
+                if stats.todayStats.cacheCreationTokens > 0 {
+                    TokenRow(label: "Cache Write", tokens: stats.todayStats.cacheCreationTokens, color: .mint)
+                }
             }
         }
     }
@@ -608,6 +674,7 @@ struct DailyView: View {
                         Spacer()
                         Text("Tokens")
                             .frame(width: 60, alignment: .trailing)
+                            .help(stats.includeCacheTokens ? "Includes cache tokens" : "Excludes cache tokens")
                         Text("Cost")
                             .frame(width: 55, alignment: .trailing)
                     }
@@ -621,7 +688,7 @@ struct DailyView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(stats.dailyBreakdown) { day in
-                                DailyRow(day: day)
+                                DailyRow(day: day, displayTokens: stats.displayTokens(for: day))
                             }
                         }
                     }
@@ -638,7 +705,7 @@ struct DailyView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .frame(minWidth: 80, alignment: .leading)
                     Spacer()
-                    Text(StatsFormatting.formatTokensCompact(stats.dailyBreakdown.reduce(0) { $0 + $1.totalTokens }))
+                    Text(StatsFormatting.formatTokensCompact(stats.dailyBreakdown.reduce(0) { $0 + stats.displayTokens(for: $1) }))
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .frame(width: 60, alignment: .trailing)
                     Text(StatsFormatting.formatCost(stats.totalCost))
@@ -653,6 +720,7 @@ struct DailyView: View {
 
 struct DailyRow: View {
     let day: DailyBreakdown
+    let displayTokens: Int
     @State private var isHovered = false
 
     var body: some View {
@@ -672,7 +740,7 @@ struct DailyRow: View {
 
             Spacer()
 
-            Text(formatTokens(day.totalTokens))
+            Text(formatTokens(displayTokens))
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
                 .frame(width: 60, alignment: .trailing)
@@ -749,7 +817,7 @@ struct ShareableStatsView: View {
                     Spacer()
                     StatBubble(value: StatsFormatting.formatCount(stats.todayStats.sessions), label: "sessions")
                     Spacer()
-                    StatBubble(value: StatsFormatting.formatTokensCompact(stats.todayStats.inputTokens + stats.todayStats.outputTokens), label: "tokens")
+                    StatBubble(value: StatsFormatting.formatTokensCompact(stats.todayDisplayTokens), label: "tokens")
                 }
             }
             .padding(20)
