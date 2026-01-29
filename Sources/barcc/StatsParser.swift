@@ -154,11 +154,11 @@ class StatsParser: ObservableObject {
 
     private let projectsPath: String
     private var pollingTimer: Timer?
-    private var seenRequests = Set<String>()
     private let statusBarModeKey = "statusBarMode"
     private let includeCacheTokensKey = "includeCacheTokens"
     private let refreshIntervalKey = "refreshInterval"
     private let dailySpendLimitKey = "dailySpendLimit"
+    private var lastFileSnapshot: [String: FileSnapshot] = [:]
 
     // Pricing per million tokens (calibrated to match Claude Code /cost)
     // Note: Max plan pricing differs from published API rates
@@ -290,64 +290,80 @@ class StatsParser: ObservableObject {
         guard !isLoading else { return }
         isLoading = true
 
-        // Dispatch to allow UI to update first
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.performLoadStats()
+        let startTime = Date()
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.performLoadStats(startTime: startTime)
         }
     }
 
-    private func performLoadStats() {
-        let startTime = Date()
-        seenRequests.removeAll()
+    private struct LoadResults {
+        let todayStats: TodayStats
+        let weeklyStats: [DailyCost]
+        let monthlyStats: [DailyCost]
+        let modelStats: [ModelStats]
+        let dailyBreakdown: [DailyBreakdown]
+        let totalMessages: Int
+        let totalSessions: Int
+        let totalCost: Double
+    }
+
+    private struct FileSnapshot: Equatable {
+        let size: UInt64
+        let modificationDate: Date
+    }
+
+    private func performLoadStats(startTime: Date) {
+        var seenRequests = Set<String>()
 
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: projectsPath) else {
-            finishLoading(startTime: startTime)
+            DispatchQueue.main.async { [weak self] in
+                self?.finishLoading(startTime: startTime)
+            }
             return
         }
 
         // Find all JSONL files
         let enumerator = fileManager.enumerator(atPath: projectsPath)
         var jsonlFiles: [String] = []
+        var fileSnapshot: [String: FileSnapshot] = [:]
+        var canUseSnapshot = true
         while let element = enumerator?.nextObject() as? String {
             if element.hasSuffix(".jsonl") {
-                jsonlFiles.append("\(projectsPath)/\(element)")
+                let filePath = "\(projectsPath)/\(element)"
+                jsonlFiles.append(filePath)
+                if canUseSnapshot {
+                    guard let attributes = try? fileManager.attributesOfItem(atPath: filePath),
+                          let size = attributes[.size] as? NSNumber,
+                          let modificationDate = attributes[.modificationDate] as? Date else {
+                        canUseSnapshot = false
+                        continue
+                    }
+                    fileSnapshot[filePath] = FileSnapshot(
+                        size: size.uint64Value,
+                        modificationDate: modificationDate
+                    )
+                }
             }
+        }
+
+        if canUseSnapshot, fileSnapshot == lastFileSnapshot {
+            DispatchQueue.main.async { [weak self] in
+                self?.finishLoading(startTime: startTime)
+            }
+            return
         }
 
         // Parse entries from all files
-        var allEntries: [(entry: UsageEntry, model: String, usage: TokenUsage)] = []
         let decoder = JSONDecoder()
-
-        for filePath in jsonlFiles {
-            guard let content = fileManager.contents(atPath: filePath),
-                  let text = String(data: content, encoding: .utf8) else { continue }
-
-            for line in text.components(separatedBy: .newlines) {
-                guard !line.isEmpty,
-                      let lineData = line.data(using: .utf8),
-                      let entry = try? decoder.decode(UsageEntry.self, from: lineData),
-                      entry.type == "assistant",
-                      let model = entry.message?.model,
-                      let usage = entry.message?.usage else { continue }
-
-                // Deduplicate by messageId:requestId (same as ccusage)
-                let messageId = entry.message?.id ?? ""
-                let requestId = entry.requestId ?? ""
-                let key = "\(messageId):\(requestId)"
-
-                if seenRequests.contains(key) { continue }
-                seenRequests.insert(key)
-
-                allEntries.append((entry, model, usage))
-            }
-        }
 
         // Group by date
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyy-MM-dd"
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let altFormatter = ISO8601DateFormatter()
+        altFormatter.formatOptions = [.withInternetDateTime]
 
         let today = dateFormatter.string(from: Date())
         let calendar = Calendar.current
@@ -373,67 +389,86 @@ class StatsParser: ObservableObject {
         }
         var dailyData: [String: DailyData] = [:]
 
-        for (entry, model, usage) in allEntries {
-            let entryDate: String
-            if let date = isoFormatter.date(from: entry.timestamp) {
-                entryDate = dateFormatter.string(from: date)
-            } else {
-                // Try parsing without fractional seconds
-                let altFormatter = ISO8601DateFormatter()
-                if let date = altFormatter.date(from: entry.timestamp) {
-                    entryDate = dateFormatter.string(from: date)
-                } else {
-                    continue
-                }
+        var totalEntries = 0
+
+        let parseEntryDate: (String) -> String? = { timestamp in
+            if let date = isoFormatter.date(from: timestamp) ?? altFormatter.date(from: timestamp) {
+                return dateFormatter.string(from: date)
             }
+            return nil
+        }
 
-            let priceModel = pricing[model] ?? defaultPricing
-            let entryCost = priceModel.calculateCost(
-                input: usage.inputTokens,
-                output: usage.outputTokens,
-                cacheRead: usage.cacheReadTokens,
-                cacheCreation: usage.cacheCreationTokens
-            )
+        for filePath in jsonlFiles {
+            autoreleasepool {
+                forEachLine(in: filePath) { line in
+                    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty,
+                          let lineData = trimmed.data(using: .utf8),
+                          let entry = try? decoder.decode(UsageEntry.self, from: lineData),
+                          entry.type == "assistant",
+                          let model = entry.message?.model,
+                          let usage = entry.message?.usage,
+                          let entryDate = parseEntryDate(entry.timestamp) else { return }
 
-            // Track sessions
-            if let sessionId = entry.sessionId {
-                sessions.insert(sessionId)
-            }
+                    // Deduplicate by messageId:requestId (same as ccusage)
+                    let messageId = entry.message?.id ?? ""
+                    let requestId = entry.requestId ?? ""
+                    let key = "\(messageId):\(requestId)"
 
-            // Model totals
-            var current = modelTotals[model] ?? (0, 0, 0, 0)
-            current.input += usage.inputTokens
-            current.output += usage.outputTokens
-            current.cacheRead += usage.cacheReadTokens
-            current.cacheCreate += usage.cacheCreationTokens
-            modelTotals[model] = current
+                    if seenRequests.contains(key) { return }
+                    seenRequests.insert(key)
 
-            // Daily breakdown
-            var daily = dailyData[entryDate] ?? DailyData()
-            daily.models.insert(model)
-            daily.inputTokens += usage.inputTokens
-            daily.outputTokens += usage.outputTokens
-            daily.cacheCreationTokens += usage.cacheCreationTokens
-            daily.cacheReadTokens += usage.cacheReadTokens
-            daily.cost += entryCost
-            dailyData[entryDate] = daily
+                    let priceModel = pricing[model] ?? defaultPricing
+                    let entryCost = priceModel.calculateCost(
+                        input: usage.inputTokens,
+                        output: usage.outputTokens,
+                        cacheRead: usage.cacheReadTokens,
+                        cacheCreation: usage.cacheCreationTokens
+                    )
 
-            // Today's stats
-            if entryDate == today {
-                todayInput += usage.inputTokens
-                todayOutput += usage.outputTokens
-                todayCacheRead += usage.cacheReadTokens
-                todayCacheCreate += usage.cacheCreationTokens
-                todayCost += entryCost
-                todayMessages += 1
-                if let sessionId = entry.sessionId {
-                    todaySessions.insert(sessionId)
+                    totalEntries += 1
+
+                    // Track sessions
+                    if let sessionId = entry.sessionId {
+                        sessions.insert(sessionId)
+                    }
+
+                    // Model totals
+                    var current = modelTotals[model] ?? (0, 0, 0, 0)
+                    current.input += usage.inputTokens
+                    current.output += usage.outputTokens
+                    current.cacheRead += usage.cacheReadTokens
+                    current.cacheCreate += usage.cacheCreationTokens
+                    modelTotals[model] = current
+
+                    // Daily breakdown
+                    var daily = dailyData[entryDate] ?? DailyData()
+                    daily.models.insert(model)
+                    daily.inputTokens += usage.inputTokens
+                    daily.outputTokens += usage.outputTokens
+                    daily.cacheCreationTokens += usage.cacheCreationTokens
+                    daily.cacheReadTokens += usage.cacheReadTokens
+                    daily.cost += entryCost
+                    dailyData[entryDate] = daily
+
+                    // Today's stats
+                    if entryDate == today {
+                        todayInput += usage.inputTokens
+                        todayOutput += usage.outputTokens
+                        todayCacheRead += usage.cacheReadTokens
+                        todayCacheCreate += usage.cacheCreationTokens
+                        todayCost += entryCost
+                        todayMessages += 1
+                        if let sessionId = entry.sessionId {
+                            todaySessions.insert(sessionId)
+                        }
+                    }
                 }
             }
         }
 
         // Build today stats
-        todayStats = TodayStats(
+        let todayStatsResult = TodayStats(
             messages: todayMessages,
             sessions: todaySessions.count,
             toolCalls: 0, // Not tracked in JSONL
@@ -478,10 +513,10 @@ class StatsParser: ObservableObject {
             ))
             allTimeCost += cost
         }
-        modelStats = models.sorted { $0.cost > $1.cost }
-        totalCost = allTimeCost
-        totalSessions = sessions.count
-        totalMessages = allEntries.count
+        let modelStatsResult = models.sorted { $0.cost > $1.cost }
+        let totalCostResult = allTimeCost
+        let totalSessionsResult = sessions.count
+        let totalMessagesResult = totalEntries
 
         // Build weekly stats (last 7 days)
         var weeklyCosts: [DailyCost] = []
@@ -495,7 +530,7 @@ class StatsParser: ObservableObject {
                 tokens: (daily?.inputTokens ?? 0) + (daily?.outputTokens ?? 0) + (daily?.cacheReadTokens ?? 0) + (daily?.cacheCreationTokens ?? 0)
             ))
         }
-        weeklyStats = weeklyCosts
+        let weeklyStatsResult = weeklyCosts
 
         // Build monthly stats (last 30 days)
         var monthlyCosts: [DailyCost] = []
@@ -509,7 +544,7 @@ class StatsParser: ObservableObject {
                 tokens: (daily?.inputTokens ?? 0) + (daily?.outputTokens ?? 0) + (daily?.cacheReadTokens ?? 0) + (daily?.cacheCreationTokens ?? 0)
             ))
         }
-        monthlyStats = monthlyCosts
+        let monthlyStatsResult = monthlyCosts
 
         // Build full daily breakdown (sorted by date descending)
         var breakdowns: [DailyBreakdown] = []
@@ -534,10 +569,36 @@ class StatsParser: ObservableObject {
                 ))
             }
         }
-        dailyBreakdown = breakdowns.sorted { $0.date > $1.date }
+        let dailyBreakdownResult = breakdowns.sorted { $0.date > $1.date }
 
-        lastUpdated = Date()
-        finishLoading(startTime: startTime)
+        let results = LoadResults(
+            todayStats: todayStatsResult,
+            weeklyStats: weeklyStatsResult,
+            monthlyStats: monthlyStatsResult,
+            modelStats: modelStatsResult,
+            dailyBreakdown: dailyBreakdownResult,
+            totalMessages: totalMessagesResult,
+            totalSessions: totalSessionsResult,
+            totalCost: totalCostResult
+        )
+
+        if canUseSnapshot {
+            lastFileSnapshot = fileSnapshot
+        }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.todayStats = results.todayStats
+            self.weeklyStats = results.weeklyStats
+            self.monthlyStats = results.monthlyStats
+            self.modelStats = results.modelStats
+            self.dailyBreakdown = results.dailyBreakdown
+            self.totalMessages = results.totalMessages
+            self.totalSessions = results.totalSessions
+            self.totalCost = results.totalCost
+            self.lastUpdated = Date()
+            self.finishLoading(startTime: startTime)
+        }
     }
 
     private func finishLoading(startTime: Date) {
@@ -562,6 +623,34 @@ class StatsParser: ObservableObject {
         let interval = max(refreshInterval, 10)
         pollingTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.loadStats()
+        }
+    }
+
+    private func forEachLine(in filePath: String, handler: (String) -> Void) {
+        guard let fileHandle = FileHandle(forReadingAtPath: filePath) else { return }
+        defer { try? fileHandle.close() }
+
+        let chunkSize = 64 * 1024
+        var buffer = Data()
+        let newline = Data([0x0A])
+
+        while true {
+            let chunk = fileHandle.readData(ofLength: chunkSize)
+            if chunk.isEmpty { break }
+            buffer.append(chunk)
+
+            while let range = buffer.firstRange(of: newline) {
+                let lineData = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
+                buffer.removeSubrange(buffer.startIndex...range.lowerBound)
+
+                if let line = String(data: lineData, encoding: .utf8) {
+                    handler(line)
+                }
+            }
+        }
+
+        if !buffer.isEmpty, let line = String(data: buffer, encoding: .utf8) {
+            handler(line)
         }
     }
 }
