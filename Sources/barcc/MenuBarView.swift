@@ -454,7 +454,7 @@ struct TrendBadge: View {
     }
 
     private var badgeText: String {
-        "\(StatsFormatting.formatPercent(deltaPercent, includeSign: true)) vs yesterday"
+        "\(StatsFormatting.formatPercent(deltaPercent, includeSign: true))"
     }
 
     private var badgeColor: Color {
