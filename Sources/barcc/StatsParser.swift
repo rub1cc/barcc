@@ -159,6 +159,7 @@ class StatsParser: ObservableObject {
     private let refreshIntervalKey = "refreshInterval"
     private let dailySpendLimitKey = "dailySpendLimit"
     private var lastFileSnapshot: [String: FileSnapshot] = [:]
+    private var lastStatsDayString: String?
 
     // Pricing per million tokens (calibrated to match Claude Code /cost)
     // Note: Max plan pricing differs from published API rates
@@ -315,6 +316,10 @@ class StatsParser: ObservableObject {
     private func performLoadStats(startTime: Date) {
         var seenRequests = Set<String>()
 
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let today = dateFormatter.string(from: Date())
+
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: projectsPath) else {
             DispatchQueue.main.async { [weak self] in
@@ -347,7 +352,7 @@ class StatsParser: ObservableObject {
             }
         }
 
-        if canUseSnapshot, fileSnapshot == lastFileSnapshot {
+        if canUseSnapshot, fileSnapshot == lastFileSnapshot, today == lastStatsDayString {
             DispatchQueue.main.async { [weak self] in
                 self?.finishLoading(startTime: startTime)
             }
@@ -358,14 +363,10 @@ class StatsParser: ObservableObject {
         let decoder = JSONDecoder()
 
         // Group by date
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let altFormatter = ISO8601DateFormatter()
         altFormatter.formatOptions = [.withInternetDateTime]
-
-        let today = dateFormatter.string(from: Date())
         let calendar = Calendar.current
 
         // Calculate today's stats
@@ -585,6 +586,7 @@ class StatsParser: ObservableObject {
         if canUseSnapshot {
             lastFileSnapshot = fileSnapshot
         }
+        lastStatsDayString = today
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }

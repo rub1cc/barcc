@@ -11,14 +11,16 @@ enum DashboardTab: String, CaseIterable {
 
 struct CardSection<Content: View>: View {
     let content: Content
+    private let contentPadding: CGFloat
 
-    init(@ViewBuilder content: () -> Content) {
+    init(padding: CGFloat = 12, @ViewBuilder content: () -> Content) {
         self.content = content()
+        self.contentPadding = padding
     }
 
     var body: some View {
         content
-            .padding(12)
+            .padding(contentPadding)
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
@@ -665,7 +667,7 @@ struct DailyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             // Daily list card
-            CardSection {
+            CardSection(padding: 0) {
                 VStack(alignment: .leading, spacing: 0) {
                     // Header
                     HStack(spacing: 0) {
@@ -680,9 +682,12 @@ struct DailyView: View {
                     }
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.top, 12)
+                    .padding(.horizontal, 12)
                     .padding(.bottom, 8)
 
                     Divider()
+                        .padding(.horizontal, 12)
 
                     // Scrollable list
                     ScrollView {
@@ -691,6 +696,8 @@ struct DailyView: View {
                                 DailyRow(day: day, displayTokens: stats.displayTokens(for: day))
                             }
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 12)
                     }
                     .frame(maxHeight: .infinity)
                 }
