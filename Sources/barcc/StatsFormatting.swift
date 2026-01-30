@@ -38,6 +38,29 @@ enum StatsFormatting {
         String(format: "$%.2f", cost)
     }
 
+    static func formatDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(Int(duration.rounded()), 0)
+        if totalSeconds < 60 {
+            return "\(totalSeconds)s"
+        }
+
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        if minutes < 60 {
+            if seconds == 0 {
+                return "\(minutes)m"
+            }
+            return "\(minutes)m \(seconds)s"
+        }
+
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        if remainingMinutes == 0 {
+            return "\(hours)h"
+        }
+        return "\(hours)h \(remainingMinutes)m"
+    }
+
     static func formatPercent(_ value: Double, includeSign: Bool = false, maximumFractionDigits: Int = 0) -> String {
         let percentValue = abs(value * 100)
         let numberString: String

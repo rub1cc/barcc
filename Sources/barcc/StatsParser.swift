@@ -35,6 +35,7 @@ struct TodayStats {
     let messages: Int
     let sessions: Int
     let toolCalls: Int
+    let sessionDuration: TimeInterval
     let inputTokens: Int
     let outputTokens: Int
     let cacheReadTokens: Int
@@ -120,7 +121,7 @@ struct ModelPricing {
 // MARK: - Stats Parser
 
 class StatsParser: ObservableObject {
-    @Published var todayStats: TodayStats = TodayStats(messages: 0, sessions: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, cost: 0)
+    @Published var todayStats: TodayStats = TodayStats(messages: 0, sessions: 0, toolCalls: 0, sessionDuration: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, cost: 0)
     @Published var weeklyStats: [DailyCost] = []
     @Published var monthlyStats: [DailyCost] = []
     @Published var modelStats: [ModelStats] = []
@@ -128,6 +129,8 @@ class StatsParser: ObservableObject {
     @Published var totalMessages: Int = 0
     @Published var totalSessions: Int = 0
     @Published var totalCost: Double = 0
+    @Published var allTimeHighCost: Double = 0
+    @Published var allTimeHighDate: Date? = nil
     @Published var lastUpdated: Date = Date()
     @Published var isLoading: Bool = false
     @Published var statusBarMode: StatusBarDisplayMode = .iconAndCost {
@@ -266,8 +269,10 @@ class StatsParser: ObservableObject {
         return weekTotalCost / Double(weeklyStats.count)
     }
     var todayCostDelta: Double { todayStats.cost - yesterdayCost }
-    var todayCostDeltaPercent: Double? {
-        guard yesterdayCost > 0 else { return nil }
+    var todayCostDeltaPercent: Double {
+        if yesterdayCost == 0 {
+            return todayStats.cost > 0 ? 1 : 0
+        }
         return todayCostDelta / yesterdayCost
     }
 
@@ -306,6 +311,8 @@ class StatsParser: ObservableObject {
         let totalMessages: Int
         let totalSessions: Int
         let totalCost: Double
+        let allTimeHighCost: Double
+        let allTimeHighDate: Date?
     }
 
     private struct FileSnapshot: Equatable {
@@ -374,6 +381,7 @@ class StatsParser: ObservableObject {
         var todayCost: Double = 0
         var todaySessions = Set<String>()
         var todayMessages = 0
+        var todaySessionTimes: [String: (start: Date, end: Date)] = [:]
 
         // Calculate totals by model
         var modelTotals: [String: (input: Int, output: Int, cacheRead: Int, cacheCreate: Int)] = [:]
@@ -392,9 +400,9 @@ class StatsParser: ObservableObject {
 
         var totalEntries = 0
 
-        let parseEntryDate: (String) -> String? = { timestamp in
+        let parseEntryDate: (String) -> (date: Date, dateString: String)? = { timestamp in
             if let date = isoFormatter.date(from: timestamp) ?? altFormatter.date(from: timestamp) {
-                return dateFormatter.string(from: date)
+                return (date, dateFormatter.string(from: date))
             }
             return nil
         }
@@ -409,7 +417,9 @@ class StatsParser: ObservableObject {
                           entry.type == "assistant",
                           let model = entry.message?.model,
                           let usage = entry.message?.usage,
-                          let entryDate = parseEntryDate(entry.timestamp) else { return }
+                          let parsedEntry = parseEntryDate(entry.timestamp) else { return }
+                    let entryDate = parsedEntry.dateString
+                    let entryTimestamp = parsedEntry.date
 
                     // Deduplicate by messageId:requestId (same as ccusage)
                     let messageId = entry.message?.id ?? ""
@@ -462,10 +472,25 @@ class StatsParser: ObservableObject {
                         todayMessages += 1
                         if let sessionId = entry.sessionId {
                             todaySessions.insert(sessionId)
+                            if var range = todaySessionTimes[sessionId] {
+                                if entryTimestamp < range.start {
+                                    range.start = entryTimestamp
+                                }
+                                if entryTimestamp > range.end {
+                                    range.end = entryTimestamp
+                                }
+                                todaySessionTimes[sessionId] = range
+                            } else {
+                                todaySessionTimes[sessionId] = (entryTimestamp, entryTimestamp)
+                            }
                         }
                     }
                 }
             }
+        }
+
+        let todaySessionDuration = todaySessionTimes.values.reduce(0) { total, range in
+            total + range.end.timeIntervalSince(range.start)
         }
 
         // Build today stats
@@ -473,6 +498,7 @@ class StatsParser: ObservableObject {
             messages: todayMessages,
             sessions: todaySessions.count,
             toolCalls: 0, // Not tracked in JSONL
+            sessionDuration: todaySessionDuration,
             inputTokens: todayInput,
             outputTokens: todayOutput,
             cacheReadTokens: todayCacheRead,
@@ -533,6 +559,16 @@ class StatsParser: ObservableObject {
         }
         let weeklyStatsResult = weeklyCosts
 
+        var allTimeHighCost: Double = 0
+        var allTimeHighDate: Date? = nil
+        for (dateStr, data) in dailyData {
+            guard let date = dateFormatter.date(from: dateStr) else { continue }
+            if allTimeHighDate == nil || data.cost > allTimeHighCost || (data.cost == allTimeHighCost && date > (allTimeHighDate ?? date)) {
+                allTimeHighCost = data.cost
+                allTimeHighDate = date
+            }
+        }
+
         // Build monthly stats (last 30 days)
         var monthlyCosts: [DailyCost] = []
         for dayOffset in (0..<30).reversed() {
@@ -580,7 +616,9 @@ class StatsParser: ObservableObject {
             dailyBreakdown: dailyBreakdownResult,
             totalMessages: totalMessagesResult,
             totalSessions: totalSessionsResult,
-            totalCost: totalCostResult
+            totalCost: totalCostResult,
+            allTimeHighCost: allTimeHighCost,
+            allTimeHighDate: allTimeHighDate
         )
 
         if canUseSnapshot {
@@ -598,6 +636,8 @@ class StatsParser: ObservableObject {
             self.totalMessages = results.totalMessages
             self.totalSessions = results.totalSessions
             self.totalCost = results.totalCost
+            self.allTimeHighCost = results.allTimeHighCost
+            self.allTimeHighDate = results.allTimeHighDate
             self.lastUpdated = Date()
             self.finishLoading(startTime: startTime)
         }

@@ -323,6 +323,7 @@ struct TodayOverviewCard: View {
                 StatTile(title: "Tokens", value: StatsFormatting.formatTokensCompact(stats.todayDisplayTokens))
                 StatTile(title: "Messages", value: StatsFormatting.formatCount(stats.todayStats.messages))
                 StatTile(title: "Sessions", value: StatsFormatting.formatCount(stats.todayStats.sessions))
+                StatTile(title: "Time", value: StatsFormatting.formatDuration(stats.todayStats.sessionDuration))
             }
 
             Divider()
@@ -344,6 +345,7 @@ struct TodayOverviewCard: View {
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: Date())
     }
+
 }
 
 // MARK: - Trend Overview
@@ -360,7 +362,21 @@ struct TrendOverviewCard: View {
                 MiniChart(data: stats.weeklyStats, labelStrideDays: 2)
 
                 SummaryRow(label: "Avg/day", value: StatsFormatting.formatCost(stats.weekAvgCost))
+                if let allTimeHighDate = stats.allTimeHighDate {
+                    SummaryRow(
+                        label: "All-time high",
+                        value: "\(formatAllTimeHighDate(allTimeHighDate)) · \(StatsFormatting.formatCost(stats.allTimeHighCost))"
+                    )
+                }
                 SummaryRow(label: "30d total", value: StatsFormatting.formatCost(monthlyTotal))
+            } else if let allTimeHighDate = stats.allTimeHighDate {
+                Text("No recent data")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+                SummaryRow(
+                    label: "All-time high",
+                    value: "\(formatAllTimeHighDate(allTimeHighDate)) · \(StatsFormatting.formatCost(stats.allTimeHighCost))"
+                )
             } else {
                 Text("No data")
                     .font(.caption)
@@ -371,6 +387,12 @@ struct TrendOverviewCard: View {
 
     private var monthlyTotal: Double {
         stats.monthlyStats.reduce(0) { $0 + $1.cost }
+    }
+
+    private func formatAllTimeHighDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d, yyyy"
+        return formatter.string(from: date)
     }
 }
 
@@ -419,7 +441,7 @@ struct TotalsSummaryCard: View {
 // MARK: - Summary Helpers
 
 struct TrendBadge: View {
-    let deltaPercent: Double?
+    let deltaPercent: Double
 
     var body: some View {
         Text(badgeText)
@@ -432,18 +454,14 @@ struct TrendBadge: View {
     }
 
     private var badgeText: String {
-        if let percent = deltaPercent {
-            return "\(StatsFormatting.formatPercent(percent, includeSign: true)) vs yesterday"
-        }
-        return "No prior day"
+        "\(StatsFormatting.formatPercent(deltaPercent, includeSign: true)) vs yesterday"
     }
 
     private var badgeColor: Color {
-        guard let percent = deltaPercent else { return .secondary }
-        if percent > 0 {
+        if deltaPercent > 0 {
             return .green
         }
-        if percent < 0 {
+        if deltaPercent < 0 {
             return .red
         }
         return .secondary
@@ -794,35 +812,34 @@ struct ShareableStatsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Header
-            HStack {
-                Text("barcc")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                Spacer()
-                Text(formattedDate())
-                    .font(.system(size: 14))
-                    .foregroundColor(.secondary)
-            }
-
             // Today stats - full width
             VStack(alignment: .leading, spacing: 12) {
                 Text("TODAY")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
                     .tracking(1)
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(StatsFormatting.formatCost(stats.todayStats.cost))
-                        .font(.system(size: 42, weight: .bold, design: .rounded))
+                        .font(.system(size: 42, weight: .bold, design: .monospaced))
                     Text("spent")
-                        .font(.system(size: 16))
+                        .font(.system(size: 16, design: .monospaced))
                         .foregroundColor(.secondary)
+                    Text(trendText)
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(trendColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(trendColor.opacity(0.12))
+                        .clipShape(Capsule())
                 }
 
                 HStack(spacing: 0) {
                     StatBubble(value: StatsFormatting.formatCount(stats.todayStats.messages), label: "messages")
                     Spacer()
                     StatBubble(value: StatsFormatting.formatCount(stats.todayStats.sessions), label: "sessions")
+                    Spacer()
+                    StatBubble(value: StatsFormatting.formatDuration(stats.todayStats.sessionDuration), label: "time")
                     Spacer()
                     StatBubble(value: StatsFormatting.formatTokensCompact(stats.todayDisplayTokens), label: "tokens")
                 }
@@ -842,8 +859,8 @@ struct ShareableStatsView: View {
             // Footer
             HStack {
                 Spacer()
-                Text("generated with barcc")
-                    .font(.system(size: 10))
+                Text("generated with rub1cc/barcc on \(formattedDate())")
+                    .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(.secondary.opacity(0.5))
             }
         }
@@ -859,6 +876,16 @@ struct ShareableStatsView: View {
         return formatter.string(from: Date())
     }
 
+    private var trendText: String {
+        "\(StatsFormatting.formatPercent(stats.todayCostDeltaPercent, includeSign: true)) vs yesterday"
+    }
+
+    private var trendColor: Color {
+        if stats.todayCostDeltaPercent > 0 { return .green }
+        if stats.todayCostDeltaPercent < 0 { return .red }
+        return .secondary
+    }
+
 }
 
 struct StatBubble: View {
@@ -868,9 +895,9 @@ struct StatBubble: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .font(.system(size: 20, weight: .semibold, design: .monospaced))
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
         }
     }
@@ -889,7 +916,7 @@ struct TokenBubble: View {
                     .fill(color)
                     .frame(width: 8, height: 8)
                 Text(label)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
             }
             Text(formatTokens(tokens))
