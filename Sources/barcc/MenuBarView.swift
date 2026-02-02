@@ -159,6 +159,7 @@ struct MenuBarView: View {
 
 struct SettingsPanel: View {
     @ObservedObject var stats: StatsParser
+    @FocusState private var isLimitFieldFocused: Bool
 
     private let intervalOptions: [(label: String, value: TimeInterval)] = [
         ("15s", 15),
@@ -167,6 +168,8 @@ struct SettingsPanel: View {
         ("2m", 120),
         ("5m", 300),
     ]
+    private let limitRange: ClosedRange<Double> = 1...1000
+    private let limitStep: Double = 1
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -218,7 +221,16 @@ struct SettingsPanel: View {
                     TextField("", value: limitBinding, format: .number)
                         .frame(width: 70)
                         .multilineTextAlignment(.trailing)
-                    Stepper("", value: limitBinding, in: 1...1000, step: 5)
+                        .focused($isLimitFieldFocused)
+                        .onKeyPress(.upArrow) {
+                            adjustLimit(by: limitStep)
+                            return .handled
+                        }
+                        .onKeyPress(.downArrow) {
+                            adjustLimit(by: -limitStep)
+                            return .handled
+                        }
+                    Stepper("", value: limitBinding, in: limitRange, step: limitStep)
                         .labelsHidden()
                 }
             }
@@ -236,6 +248,13 @@ struct SettingsPanel: View {
             get: { stats.dailySpendLimit },
             set: { stats.dailySpendLimit = max(1, $0) }
         )
+    }
+
+    private func adjustLimit(by delta: Double) {
+        let next = min(max(limitRange.lowerBound, stats.dailySpendLimit + delta), limitRange.upperBound)
+        if next != stats.dailySpendLimit {
+            stats.dailySpendLimit = next
+        }
     }
 }
 
