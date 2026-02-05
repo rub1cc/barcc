@@ -35,7 +35,7 @@ struct MenuBarView: View {
     @ObservedObject var stats: StatsParser
     @State private var selectedTab: DashboardTab = .summary
     @State private var spinTrigger: Int = 0
-    @State private var showSettings: Bool = false
+    @StateObject private var settingsWindow = SettingsWindowController()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -84,7 +84,7 @@ struct MenuBarView: View {
                 .help("Save Screenshot")
 
                 Button(action: {
-                    showSettings.toggle()
+                    settingsWindow.show(stats: stats)
                 }) {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 12))
@@ -92,9 +92,6 @@ struct MenuBarView: View {
                 .buttonStyle(.plain)
                 .foregroundColor(.secondary)
                 .help("Settings")
-                .popover(isPresented: $showSettings, arrowEdge: .bottom) {
-                    SettingsPanel(stats: stats)
-                }
 
                 Spacer()
 
@@ -157,109 +154,6 @@ struct MenuBarView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date())
-    }
-}
-
-// MARK: - Settings Panel
-
-struct SettingsPanel: View {
-    @ObservedObject var stats: StatsParser
-    @FocusState private var isLimitFieldFocused: Bool
-
-    private let intervalOptions: [(label: String, value: TimeInterval)] = [
-        ("15s", 15),
-        ("30s", 30),
-        ("1m", 60),
-        ("2m", 120),
-        ("5m", 300),
-    ]
-    private let limitRange: ClosedRange<Double> = 1...1000
-    private let limitStep: Double = 1
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Settings")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(.secondary)
-
-            HStack {
-                Text("Status bar")
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                Picker("", selection: $stats.statusBarMode) {
-                    ForEach(StatusBarDisplayMode.allCases) { option in
-                        Text(option.rawValue).tag(option)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 160, alignment: .trailing)
-            }
-
-            HStack {
-                Text("Refresh")
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                Picker("", selection: $stats.refreshInterval) {
-                    ForEach(intervalOptions, id: \.value) { option in
-                        Text(option.label).tag(option.value)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 120, alignment: .trailing)
-            }
-
-            Toggle("Include cache tokens", isOn: $stats.includeCacheTokens)
-                .font(.system(size: 11, weight: .medium))
-                .toggleStyle(.switch)
-
-            Divider()
-
-            HStack {
-                Text("Daily limit")
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                HStack(spacing: 6) {
-                    Text("$")
-                        .foregroundColor(.secondary)
-                    TextField("", value: limitBinding, format: .number)
-                        .frame(width: 70)
-                        .multilineTextAlignment(.trailing)
-                        .focused($isLimitFieldFocused)
-                        .onKeyPress(.upArrow) {
-                            adjustLimit(by: limitStep)
-                            return .handled
-                        }
-                        .onKeyPress(.downArrow) {
-                            adjustLimit(by: -limitStep)
-                            return .handled
-                        }
-                    Stepper("", value: limitBinding, in: limitRange, step: limitStep)
-                        .labelsHidden()
-                }
-            }
-
-            Text("Colors: <25% green, <50% yellow, <75% orange, ≥75% red")
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-        }
-        .padding(12)
-        .frame(width: 280)
-    }
-
-    private var limitBinding: Binding<Double> {
-        Binding(
-            get: { stats.dailySpendLimit },
-            set: { stats.dailySpendLimit = max(1, $0) }
-        )
-    }
-
-    private func adjustLimit(by delta: Double) {
-        let next = min(max(limitRange.lowerBound, stats.dailySpendLimit + delta), limitRange.upperBound)
-        if next != stats.dailySpendLimit {
-            stats.dailySpendLimit = next
-        }
     }
 }
 
