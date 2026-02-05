@@ -527,17 +527,25 @@ struct MiniChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            let maxCost = max(data.map(\.cost).max() ?? 0, 1)
             Chart(data) { day in
                 BarMark(
                     x: .value("Date", day.date, unit: .day),
-                    y: .value("Cost", day.cost)
+                    y: .value("Cost", maxCost),
+                    stacking: .unstacked
                 )
-                .foregroundStyle(
-                    hoveredDay?.id == day.id
-                        ? Color.blue
-                        : Color.blue.opacity(0.5)
+                .foregroundStyle(Color.secondary.opacity(hoveredDay?.id == day.id ? 0.1 : 0.0))
+                .cornerRadius(2)
+                .zIndex(0)
+
+                BarMark(
+                    x: .value("Date", day.date, unit: .day),
+                    y: .value("Cost", day.cost),
+                    stacking: .unstacked
                 )
+                .foregroundStyle(Color.blue.opacity(0.55))
                 .cornerRadius(1)
+                .zIndex(1)
             }
             .chartXAxis {
                 AxisMarks(values: .stride(by: .day, count: labelStrideDays)) { value in
@@ -566,7 +574,7 @@ struct MiniChart: View {
                         }
                 }
             }
-            .frame(height: 60)
+            .frame(height: 90)
 
             // Tooltip
             if let day = hoveredDay {
