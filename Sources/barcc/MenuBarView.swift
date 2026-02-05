@@ -7,6 +7,11 @@ enum DashboardTab: String, CaseIterable {
     case daily = "Daily"
 }
 
+enum TrendRange: String, CaseIterable {
+    case last7 = "7 Days"
+    case last30 = "30 Days"
+}
+
 // MARK: - Card Section
 
 struct CardSection<Content: View>: View {
@@ -371,23 +376,33 @@ struct TodayOverviewCard: View {
 
 struct TrendOverviewCard: View {
     @ObservedObject var stats: StatsParser
+    @State private var range: TrendRange = .last7
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionHeader(title: "Last 7 Days", trailing: StatsFormatting.formatCost(stats.weekTotalCost))
+            SectionHeader(title: "Trends", trailing: StatsFormatting.formatCost(rangeTotal))
 
-            let hasData = stats.weeklyStats.contains { $0.cost > 0 || $0.tokens > 0 }
+            Picker("", selection: $range) {
+                ForEach(TrendRange.allCases, id: \.self) { option in
+                    Text(option.rawValue).tag(option)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            let data = chartData
+            let hasData = data.contains { $0.cost > 0 || $0.tokens > 0 }
             if hasData {
-                MiniChart(data: stats.weeklyStats, labelStrideDays: 2)
+                MiniChart(data: data, labelStrideDays: labelStrideDays)
 
-                SummaryRow(label: "Avg/day", value: StatsFormatting.formatCost(stats.weekAvgCost))
+                SummaryRow(label: "Avg/day", value: StatsFormatting.formatCost(rangeAvgCost))
                 if let allTimeHighDate = stats.allTimeHighDate {
                     SummaryRow(
                         label: "All-time high",
                         value: "\(formatAllTimeHighDate(allTimeHighDate)) · \(StatsFormatting.formatCost(stats.allTimeHighCost))"
                     )
                 }
-                SummaryRow(label: "30d total", value: StatsFormatting.formatCost(monthlyTotal))
+                SummaryRow(label: otherTotalLabel, value: StatsFormatting.formatCost(otherTotal))
             } else if let allTimeHighDate = stats.allTimeHighDate {
                 Text("No recent data")
                     .font(.caption)
@@ -402,6 +417,31 @@ struct TrendOverviewCard: View {
                     .foregroundColor(.secondary.opacity(0.7))
             }
         }
+    }
+
+    private var chartData: [DailyCost] {
+        range == .last7 ? stats.weeklyStats : stats.monthlyStats
+    }
+
+    private var rangeTotal: Double {
+        range == .last7 ? stats.weekTotalCost : monthlyTotal
+    }
+
+    private var rangeAvgCost: Double {
+        guard !chartData.isEmpty else { return 0 }
+        return rangeTotal / Double(chartData.count)
+    }
+
+    private var otherTotalLabel: String {
+        range == .last7 ? "30d total" : "7d total"
+    }
+
+    private var otherTotal: Double {
+        range == .last7 ? monthlyTotal : stats.weekTotalCost
+    }
+
+    private var labelStrideDays: Int {
+        range == .last7 ? 2 : 7
     }
 
     private var monthlyTotal: Double {
