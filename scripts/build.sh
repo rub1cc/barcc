@@ -14,7 +14,9 @@ SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"    # "Developer ID Application: Name (T
 # App metadata
 APP_NAME="barcc"
 BUNDLE_ID="com.barcc.app"
-VERSION="${VERSION:-1.0}"
+MARKETING_VERSION="${MARKETING_VERSION:-}"
+BUILD_NUMBER="${BUILD_NUMBER:-}"
+VERSION="${VERSION:-}"
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,6 +24,8 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_DIR/.build/release"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+INFO_PLIST="$PROJECT_DIR/Resources/Info.plist"
+VERSION_FILE="$PROJECT_DIR/VERSION"
 DMG_NAME="$APP_NAME-$VERSION.dmg"
 
 # Colors for output
@@ -37,6 +41,38 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # =============================================================================
 # Build Functions
 # =============================================================================
+
+load_version_file() {
+    if [ ! -f "$VERSION_FILE" ]; then
+        log_error "VERSION file not found at $VERSION_FILE"
+        exit 1
+    fi
+
+    # shellcheck disable=SC1090
+    source "$VERSION_FILE"
+}
+
+sync_version_info() {
+    if [ -z "$MARKETING_VERSION" ] || [ -z "$BUILD_NUMBER" ]; then
+        load_version_file
+    fi
+
+    if [ -z "$MARKETING_VERSION" ] || [ -z "$BUILD_NUMBER" ]; then
+        log_error "MARKETING_VERSION/BUILD_NUMBER missing in $VERSION_FILE"
+        exit 1
+    fi
+
+    VERSION="$MARKETING_VERSION"
+    DMG_NAME="$APP_NAME-$VERSION.dmg"
+
+    if [ -f "$INFO_PLIST" ]; then
+        /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString \"$MARKETING_VERSION\"" "$INFO_PLIST"
+        /usr/libexec/PlistBuddy -c "Set :CFBundleVersion \"$BUILD_NUMBER\"" "$INFO_PLIST"
+        log_info "Using version $MARKETING_VERSION ($BUILD_NUMBER)"
+    else
+        log_warn "Info.plist not found at $INFO_PLIST"
+    fi
+}
 
 build_binary() {
     log_info "Building release binary..."
@@ -58,7 +94,7 @@ create_app_bundle() {
     chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
     # Copy Info.plist
-    cp "$PROJECT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/"
+    cp "$INFO_PLIST" "$APP_BUNDLE/Contents/"
 
     # Copy app icon
     cp "$PROJECT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/"
@@ -168,6 +204,10 @@ usage() {
 
 main() {
     local cmd="${1:-all}"
+
+    if [ "$cmd" != "-h" ] && [ "$cmd" != "--help" ] && [ "$cmd" != "help" ]; then
+        sync_version_info
+    fi
 
     case "$cmd" in
         build)

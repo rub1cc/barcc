@@ -1,24 +1,6 @@
 import SwiftUI
 import AppKit
-
-enum SettingsSection: String, CaseIterable, Identifiable {
-    case general = "General"
-    case statusBar = "Status Bar"
-    case usage = "Usage"
-
-    var id: String { rawValue }
-
-    var systemImage: String {
-        switch self {
-        case .general:
-            return "slider.horizontal.3"
-        case .statusBar:
-            return "menubar.rectangle"
-        case .usage:
-            return "gauge"
-        }
-    }
-}
+import Foundation
 
 final class SettingsWindowController: NSObject, ObservableObject, NSWindowDelegate {
     private var window: NSWindow?
@@ -51,28 +33,6 @@ final class SettingsWindowController: NSObject, ObservableObject, NSWindowDelega
 
 struct SettingsWindowView: View {
     @ObservedObject var stats: StatsParser
-    @State private var selection: SettingsSection = .general
-
-    var body: some View {
-        NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selection) { section in
-                Label(section.rawValue, systemImage: section.systemImage)
-                    .font(.system(size: 12, weight: .medium))
-                    .tag(section)
-            }
-            .listStyle(.sidebar)
-            .frame(minWidth: 180)
-        } detail: {
-            SettingsDetailView(stats: stats, section: selection)
-        }
-        .navigationTitle("Settings")
-        .frame(minWidth: 700, minHeight: 520)
-    }
-}
-
-struct SettingsDetailView: View {
-    @ObservedObject var stats: StatsParser
-    let section: SettingsSection
     @FocusState private var isLimitFieldFocused: Bool
 
     private let intervalOptions: [(label: String, value: TimeInterval)] = [
@@ -87,99 +47,90 @@ struct SettingsDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(section.rawValue)
-                    .font(.system(size: 18, weight: .semibold))
+            VStack(alignment: .leading, spacing: 20) {
+                SettingsGroup(title: "General") {
+                    SettingsRow(
+                        title: "Token totals",
+                        subtitle: "Include cache tokens in totals and charts."
+                    ) {
+                        Toggle("", isOn: $stats.includeCacheTokens)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                    }
+                    SettingsGroupDivider()
+                    SettingsRow(
+                        title: "Refresh interval",
+                        subtitle: "How often usage data refreshes in the background."
+                    ) {
+                        Picker("", selection: $stats.refreshInterval) {
+                            ForEach(intervalOptions, id: \.value) { option in
+                                Text(option.label).tag(option.value)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 140, alignment: .trailing)
+                    }
+                    SettingsGroupDivider()
+                    SettingsRow(title: "App version") {
+                        Text(appVersion)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
 
-                switch section {
-                case .general:
-                    generalSection
-                case .statusBar:
-                    statusBarSection
-                case .usage:
-                    usageSection
+                SettingsGroup(title: "Status Bar") {
+                    SettingsRow(
+                        title: "Status bar display",
+                        subtitle: "Choose what appears next to the icon."
+                    ) {
+                        Picker("", selection: $stats.statusBarMode) {
+                            ForEach(StatusBarDisplayMode.allCases) { option in
+                                Text(option.rawValue).tag(option)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 180, alignment: .trailing)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingsGroup(title: "Usage") {
+                        SettingsRow(
+                            title: "Daily limit",
+                            subtitle: "Sets the color of the status icon by spend."
+                        ) {
+                            HStack(spacing: 6) {
+                                Text("$")
+                                    .foregroundColor(.secondary)
+                                TextField("", value: limitBinding, format: .number)
+                                    .frame(width: 80)
+                                    .multilineTextAlignment(.trailing)
+                                    .focused($isLimitFieldFocused)
+                                    .onKeyPress(.upArrow) {
+                                        adjustLimit(by: limitStep)
+                                        return .handled
+                                    }
+                                    .onKeyPress(.downArrow) {
+                                        adjustLimit(by: -limitStep)
+                                        return .handled
+                                    }
+                                Stepper("", value: limitBinding, in: limitRange, step: limitStep)
+                                    .labelsHidden()
+                            }
+                        }
+                    }
+
+                    Text("Colors: <25% green, <50% yellow, <75% orange, >=75% red")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
                 }
             }
             .padding(24)
         }
         .background(Color(NSColor.windowBackgroundColor))
-    }
-
-    private var generalSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsCard(
-                title: "Token totals",
-                subtitle: "Include cache tokens in totals and charts."
-            ) {
-                Toggle("", isOn: $stats.includeCacheTokens)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-            }
-
-            SettingsCard(
-                title: "Refresh interval",
-                subtitle: "How often usage data refreshes in the background."
-            ) {
-                Picker("", selection: $stats.refreshInterval) {
-                    ForEach(intervalOptions, id: \.value) { option in
-                        Text(option.label).tag(option.value)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 140, alignment: .trailing)
-            }
-        }
-    }
-
-    private var statusBarSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsCard(
-                title: "Status bar display",
-                subtitle: "Choose what appears next to the icon."
-            ) {
-                Picker("", selection: $stats.statusBarMode) {
-                    ForEach(StatusBarDisplayMode.allCases) { option in
-                        Text(option.rawValue).tag(option)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 180, alignment: .trailing)
-            }
-        }
-    }
-
-    private var usageSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SettingsCard(
-                title: "Daily limit",
-                subtitle: "Sets the color of the status icon by spend."
-            ) {
-                HStack(spacing: 6) {
-                    Text("$")
-                        .foregroundColor(.secondary)
-                    TextField("", value: limitBinding, format: .number)
-                        .frame(width: 80)
-                        .multilineTextAlignment(.trailing)
-                        .focused($isLimitFieldFocused)
-                        .onKeyPress(.upArrow) {
-                            adjustLimit(by: limitStep)
-                            return .handled
-                        }
-                        .onKeyPress(.downArrow) {
-                            adjustLimit(by: -limitStep)
-                            return .handled
-                        }
-                    Stepper("", value: limitBinding, in: limitRange, step: limitStep)
-                        .labelsHidden()
-                }
-            }
-
-            Text("Colors: <25% green, <50% yellow, <75% orange, >=75% red")
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-        }
+        .frame(minWidth: 700, minHeight: 520)
     }
 
     private var limitBinding: Binding<Double> {
@@ -187,6 +138,16 @@ struct SettingsDetailView: View {
             get: { stats.dailySpendLimit },
             set: { stats.dailySpendLimit = max(1, $0) }
         )
+    }
+
+    private var appVersion: String {
+        let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+
+        if let shortVersion, !shortVersion.isEmpty {
+            return shortVersion
+        }
+
+        return "Unknown"
     }
 
     private func adjustLimit(by delta: Double) {
@@ -197,7 +158,35 @@ struct SettingsDetailView: View {
     }
 }
 
-struct SettingsCard<Content: View>: View {
+struct SettingsGroup<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.primary)
+
+            VStack(spacing: 0) {
+                content
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+        }
+    }
+}
+
+struct SettingsRow<Content: View>: View {
     let title: String
     let subtitle: String?
     let content: Content
@@ -223,12 +212,14 @@ struct SettingsCard<Content: View>: View {
             Spacer()
             content
         }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+}
+
+struct SettingsGroupDivider: View {
+    var body: some View {
+        Divider()
+            .padding(.leading, 12)
     }
 }
