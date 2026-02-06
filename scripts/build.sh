@@ -14,7 +14,7 @@ SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"    # "Developer ID Application: Name (T
 # App metadata
 APP_NAME="barcc"
 BUNDLE_ID="com.barcc.app"
-VERSION="1.0"
+VERSION="${VERSION:-1.0}"
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
